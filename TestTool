@@ -1,0 +1,120 @@
+// ./bench ${db.host} ${db.user} ${db.password} ${db.database} ${action:[create|update]} ${updateSize}
+package main
+
+import (
+	"database/sql"
+	_ "github.com/go-sql-driver/mysql"
+	"log"
+	"os"
+	"fmt"
+	"strconv"
+	"math/rand"
+	"time"
+)
+
+func doUpdate(db *sql.DB, charidFrom, charidTo, sizeInKB uint64) {
+	log.Println("doUpdate")
+	buff := make([]byte, 1024*sizeInKB)
+  // 用随机数填 buff
+  rand.Read(buff)
+
+	stmt, err := db.Prepare("UPDATE `charbase` SET `data` = ?, `onlinetime` = ? WHERE `charid` = ?;")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	counter := 0
+	timer := time.Now()
+
+	for ; true; {
+
+		if 1000 == counter {
+			counter = 0
+			duration := time.Since(timer)
+			log.Printf("1000 updates executed, %d ms avg.\n", (duration/1000000 /*milli-seconds*/)/1000.0)
+		}
+
+		if 0 == counter {
+			timer = time.Now()
+		}
+
+		charid := rand.Int63n(int64(charidTo-charidFrom)) + int64(charidFrom) // 随机找一个 charid
+    // 随机更新 buff[pos] 的数
+		for i := uint64(0); i < sizeInKB; i++ {
+			pos := rand.Int31n(int32(1024 * sizeInKB))
+			buff[pos] = byte(rand.Intn(int(254)))
+		}
+
+		// 执行更新
+		stmt.Exec(buff, time.Now().Unix(), charid)
+
+		counter++
+	}
+}
+
+func main() {
+
+	rand.Seed(time.Now().Unix())
+
+	var (
+		host     string
+		user     string
+		password string
+		database string
+		action   string
+		sizeInKB int
+	)
+
+	accidFrom := uint64(40000000)
+	accidTo := uint64(40500000) // 50万 accid
+
+  // 先执行 insert , 而后才可以确认 charid 的 from - to
+	charidFrom := uint64(4294967595)
+	charidTo := uint64(4294967595 + 1500000)
+
+	for e := range os.Args {
+		log.Println(e, os.Args[e])
+		if e == 1 {
+      // 1st arg, db.host
+			host = os.Args[e]
+		}
+		if e == 2 {
+      // 2nd arg, db.user
+			user = os.Args[e]
+		}
+		if e == 3 {
+      // 3rd arg, db.password
+			password = os.Args[e]
+		}
+		if e == 4 {
+      // 4th arg, db.database
+			database = os.Args[e]
+		}
+		if e == 5 {
+      // 5th arg, create or update
+			action = os.Args[e]
+		}
+		if e == 6 && action == "update" {
+      // 6th arg, specify data size in byte when update
+			sizeInKB, _ = strconv.Atoi(os.Args[e])
+		}
+	}
+
+	db, err := sql.Open("mysql", fmt.Sprintf("%s:%s@tcp(%s:3306)/%s", user, password, host, database))
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	err = db.Ping()
+	if err != nil {
+		log.Fatal(err)
+		return
+	}
+
+	switch action {
+	case "update":
+		doUpdate(db, charidFrom, charidTo, uint64(sizeInKB))
+	}
+
+}
